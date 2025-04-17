@@ -3,23 +3,23 @@ pipeline {
 
     stages {
         
-         stage('Pre-check') {
-            steps {
-                script {
-                    // Lấy thông điệp của commit hiện tại
-                    def commitMessage = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
-                    echo "Commit Message: ${commitMessage}"
+        //  stage('Pre-check') {
+        //     steps {
+        //         script {
+        //             // Lấy thông điệp của commit hiện tại
+        //             def commitMessage = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+        //             echo "Commit Message: ${commitMessage}"
                     
-                    // Nếu nhánh không phải main và commit là merge pull request thì dừng pipeline
-                    if (env.BRANCH_NAME != 'main' && commitMessage.contains("Merge pull request")) {
-                        echo "Nhánh ${env.BRANCH_NAME} là nhánh merge PR. Bỏ qua pipeline."
-                        // Dừng pipeline: ta có thể dùng error() để dừng và báo kết quả thành công
-                        currentBuild.result = 'SUCCESS'
-                        error("Skip build for non-main branch after merge")
-                    }
-                }
-            }
-        }
+        //             // Nếu nhánh không phải main và commit là merge pull request thì dừng pipeline
+        //             if (env.BRANCH_NAME != 'main' && commitMessage.contains("Merge pull request")) {
+        //                 echo "Nhánh ${env.BRANCH_NAME} là nhánh merge PR. Bỏ qua pipeline."
+        //                 // Dừng pipeline: ta có thể dùng error() để dừng và báo kết quả thành công
+        //                 currentBuild.result = 'SUCCESS'
+        //                 error("Skip build for non-main branch after merge")
+        //             }
+        //         }
+        //     }
+        // }
 
         stage('Checkout Code') {
             steps {
@@ -32,173 +32,173 @@ pipeline {
             }
         }
         
-        stage('Test Services') {
-            parallel {
-                stage('Test - Customers Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-customers-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Running tests for Customers Service..."
-                        sh './mvnw -pl spring-petclinic-customers-service clean test'
-                    }
-                    post {
-                        always {
-                            echo "Publishing test results for Customers Service..."
-                            dir('spring-petclinic-customers-service') {
-                                junit 'target/surefire-reports/*.xml'
-                                recordCoverage(
-                                    tools: [[parser: 'JACOCO']],
-                                    id: 'customers-service-coverage',
-                                    name: 'Customers Service Coverage',
-                                    sourceCodeRetention: 'EVERY_BUILD',
-                                    // qualityGates: [
-                                    //     [threshold: 71.0, metric: 'LINE', criticality: 'FAILURE'],
-                                    //     [threshold: 65.0, metric: 'BRANCH', criticality: 'FAILURE'],
-                                    //     [threshold: 75.0, metric: 'METHOD', criticality: 'FAILURE']
-                                    // ]
-                                )
-                                archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true
-                            }
-                        }
-                    }
-                }
+        // stage('Test Services') {
+        //     parallel {
+        //         stage('Test - Customers Service') {
+        //             when {
+        //                 changeset pattern: 'spring-petclinic-customers-service/**', comparator: 'ANT'
+        //             }
+        //             steps {
+        //                 echo "Running tests for Customers Service..."
+        //                 sh './mvnw -pl spring-petclinic-customers-service clean test'
+        //             }
+        //             post {
+        //                 always {
+        //                     echo "Publishing test results for Customers Service..."
+        //                     dir('spring-petclinic-customers-service') {
+        //                         junit 'target/surefire-reports/*.xml'
+        //                         recordCoverage(
+        //                             tools: [[parser: 'JACOCO']],
+        //                             id: 'customers-service-coverage',
+        //                             name: 'Customers Service Coverage',
+        //                             sourceCodeRetention: 'EVERY_BUILD',
+        //                             // qualityGates: [
+        //                             //     [threshold: 71.0, metric: 'LINE', criticality: 'FAILURE'],
+        //                             //     [threshold: 65.0, metric: 'BRANCH', criticality: 'FAILURE'],
+        //                             //     [threshold: 75.0, metric: 'METHOD', criticality: 'FAILURE']
+        //                             // ]
+        //                         )
+        //                         archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true
+        //                     }
+        //                 }
+        //             }
+        //         }
                 
-                stage('Test - Genai Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-genai-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Running tests for Genai Service..."
-                        sh './mvnw -pl spring-petclinic-genai-service clean test'
-                    }
-                    post {
-                        always {
-                            echo "Publishing test results for Genai Service..."
-                            dir('spring-petclinic-genai-service') {
-                                junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
-                                recordCoverage(
-                                    tools: [[parser: 'JACOCO']],
-                                    id: 'genai-service-coverage',
-                                    name: 'Gen Ai Service Coverage',
-                                    sourceCodeRetention: 'EVERY_BUILD',
-                                    // qualityGates: [
-                                    //     [threshold: 71.0, metric: 'LINE', criticality: 'UNSTABLE'],
-                                    //     [threshold: 65.0, metric: 'BRANCH', criticality: 'UNSTABLE'],
-                                    //     [threshold: 75.0, metric: 'METHOD', criticality: 'UNSTABLE']
-                                    // ]
-                                )
-                                archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true, allowEmptyArchive: true
-                            }
-                        }
-                    }
-                }
+        //         stage('Test - Genai Service') {
+        //             when {
+        //                 changeset pattern: 'spring-petclinic-genai-service/**', comparator: 'ANT'
+        //             }
+        //             steps {
+        //                 echo "Running tests for Genai Service..."
+        //                 sh './mvnw -pl spring-petclinic-genai-service clean test'
+        //             }
+        //             post {
+        //                 always {
+        //                     echo "Publishing test results for Genai Service..."
+        //                     dir('spring-petclinic-genai-service') {
+        //                         junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
+        //                         recordCoverage(
+        //                             tools: [[parser: 'JACOCO']],
+        //                             id: 'genai-service-coverage',
+        //                             name: 'Gen Ai Service Coverage',
+        //                             sourceCodeRetention: 'EVERY_BUILD',
+        //                             // qualityGates: [
+        //                             //     [threshold: 71.0, metric: 'LINE', criticality: 'UNSTABLE'],
+        //                             //     [threshold: 65.0, metric: 'BRANCH', criticality: 'UNSTABLE'],
+        //                             //     [threshold: 75.0, metric: 'METHOD', criticality: 'UNSTABLE']
+        //                             // ]
+        //                         )
+        //                         archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true, allowEmptyArchive: true
+        //                     }
+        //                 }
+        //             }
+        //         }
                 
-                stage('Test - Vets Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-vets-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Running tests for Vets Service..."
-                        sh './mvnw -pl spring-petclinic-vets-service clean test'
-                    }
-                    post {
-                        always {
-                            echo "Publishing test results for Vets Service..."
-                            dir('spring-petclinic-vets-service') {
-                                junit 'target/surefire-reports/*.xml'
-                                recordCoverage(
-                                    tools: [[parser: 'JACOCO']],
-                                    id: 'vets-service-coverage',
-                                    name: 'vets Service Coverage',
-                                    sourceCodeRetention: 'EVERY_BUILD',
-                                    // qualityGates: [
-                                    //     [threshold: 71.0, metric: 'LINE',criticality: 'FAILURE'],
-                                    //     [threshold: 65.0, metric: 'BRANCH', criticality: 'FAILURE'],
-                                    //     [threshold: 75.0, metric: 'METHOD', criticality: 'FAILURE']
-                                    // ]
-                                )
-                                archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true
-                            }
-                        }
-                    }
-                }
+        //         stage('Test - Vets Service') {
+        //             when {
+        //                 changeset pattern: 'spring-petclinic-vets-service/**', comparator: 'ANT'
+        //             }
+        //             steps {
+        //                 echo "Running tests for Vets Service..."
+        //                 sh './mvnw -pl spring-petclinic-vets-service clean test'
+        //             }
+        //             post {
+        //                 always {
+        //                     echo "Publishing test results for Vets Service..."
+        //                     dir('spring-petclinic-vets-service') {
+        //                         junit 'target/surefire-reports/*.xml'
+        //                         recordCoverage(
+        //                             tools: [[parser: 'JACOCO']],
+        //                             id: 'vets-service-coverage',
+        //                             name: 'vets Service Coverage',
+        //                             sourceCodeRetention: 'EVERY_BUILD',
+        //                             // qualityGates: [
+        //                             //     [threshold: 71.0, metric: 'LINE',criticality: 'FAILURE'],
+        //                             //     [threshold: 65.0, metric: 'BRANCH', criticality: 'FAILURE'],
+        //                             //     [threshold: 75.0, metric: 'METHOD', criticality: 'FAILURE']
+        //                             // ]
+        //                         )
+        //                         archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true
+        //                     }
+        //                 }
+        //             }
+        //         }
                 
-                stage('Test - Visits Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-visits-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Running tests for Visits Service..."
-                        sh './mvnw -pl spring-petclinic-visits-service clean test'
-                    }
-                    post {
-                        always {
-                            echo "Publishing test results for Visits Service..."
-                            dir('spring-petclinic-visits-service') {
-                                junit 'target/surefire-reports/*.xml'
-                                recordCoverage(
-                                    tools: [[parser: 'JACOCO']],
-                                    id: 'visits-service-coverage',
-                                    name: 'visits Service Coverage',
-                                    sourceCodeRetention: 'EVERY_BUILD',
-                                    // qualityGates: [
-                                    //     [threshold: 71.0, metric: 'LINE', criticality: 'FAILURE'],
-                                    //     [threshold: 65.0, metric: 'BRANCH', criticality: 'FAILURE'],
-                                    //     [threshold: 75.0, metric: 'METHOD', criticality: 'FAILURE']
-                                    // ]
-                                )
-                                archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        //         stage('Test - Visits Service') {
+        //             when {
+        //                 changeset pattern: 'spring-petclinic-visits-service/**', comparator: 'ANT'
+        //             }
+        //             steps {
+        //                 echo "Running tests for Visits Service..."
+        //                 sh './mvnw -pl spring-petclinic-visits-service clean test'
+        //             }
+        //             post {
+        //                 always {
+        //                     echo "Publishing test results for Visits Service..."
+        //                     dir('spring-petclinic-visits-service') {
+        //                         junit 'target/surefire-reports/*.xml'
+        //                         recordCoverage(
+        //                             tools: [[parser: 'JACOCO']],
+        //                             id: 'visits-service-coverage',
+        //                             name: 'visits Service Coverage',
+        //                             sourceCodeRetention: 'EVERY_BUILD',
+        //                             // qualityGates: [
+        //                             //     [threshold: 71.0, metric: 'LINE', criticality: 'FAILURE'],
+        //                             //     [threshold: 65.0, metric: 'BRANCH', criticality: 'FAILURE'],
+        //                             //     [threshold: 75.0, metric: 'METHOD', criticality: 'FAILURE']
+        //                             // ]
+        //                         )
+        //                         archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
         
-        stage('Build Services') {
-            parallel {
-                stage('Build - Customers Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-customers-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Building Customers Service..."
-                        sh './mvnw -pl spring-petclinic-customers-service -am clean install -DskipTests'
-                    }
-                }
+        // stage('Build Services') {
+        //     parallel {
+        //         stage('Build - Customers Service') {
+        //             when {
+        //                 changeset pattern: 'spring-petclinic-customers-service/**', comparator: 'ANT'
+        //             }
+        //             steps {
+        //                 echo "Building Customers Service..."
+        //                 sh './mvnw -pl spring-petclinic-customers-service -am clean install -DskipTests'
+        //             }
+        //         }
                 
-                stage('Build - Genai Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-genai-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Building Genai Service..."
-                        sh './mvnw -pl spring-petclinic-genai-service -am clean install -DskipTests'
-                    }
-                }
+        //         stage('Build - Genai Service') {
+        //             when {
+        //                 changeset pattern: 'spring-petclinic-genai-service/**', comparator: 'ANT'
+        //             }
+        //             steps {
+        //                 echo "Building Genai Service..."
+        //                 sh './mvnw -pl spring-petclinic-genai-service -am clean install -DskipTests'
+        //             }
+        //         }
                 
-                stage('Build - Vets Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-vets-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Building Vets Service..."
-                        sh './mvnw -pl spring-petclinic-vets-service -am clean install -DskipTests'
-                    }
-                }
+        //         stage('Build - Vets Service') {
+        //             when {
+        //                 changeset pattern: 'spring-petclinic-vets-service/**', comparator: 'ANT'
+        //             }
+        //             steps {
+        //                 echo "Building Vets Service..."
+        //                 sh './mvnw -pl spring-petclinic-vets-service -am clean install -DskipTests'
+        //             }
+        //         }
                 
-                stage('Build - Visits Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-visits-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Building Visits Service..."
-                        sh './mvnw -pl spring-petclinic-visits-service -am clean install -DskipTests'
-                    }
-                }
-            }
-        }
+        //         stage('Build - Visits Service') {
+        //             when {
+        //                 changeset pattern: 'spring-petclinic-visits-service/**', comparator: 'ANT'
+        //             }
+        //             steps {
+        //                 echo "Building Visits Service..."
+        //                 sh './mvnw -pl spring-petclinic-visits-service -am clean install -DskipTests'
+        //             }
+        //         }
+        //     }
+        // }
         
         stage('Build Docker Images') {
             steps {
