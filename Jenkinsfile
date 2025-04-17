@@ -2,321 +2,278 @@ pipeline {
     agent any
 
     stages {
-        
-         stage('Pre-check') {
+        stage('Detect Changes') {
             steps {
                 script {
-                    // Lấy thông điệp của commit hiện tại
-                    def commitMessage = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
-                    echo "Commit Message: ${commitMessage}"
-                    
-                    // Nếu nhánh không phải main và commit là merge pull request thì dừng pipeline
-                    if (env.BRANCH_NAME != 'main' && commitMessage.contains("Merge pull request")) {
-                        echo "Nhánh ${env.BRANCH_NAME} là nhánh merge PR. Bỏ qua pipeline."
-                        // Dừng pipeline: ta có thể dùng error() để dừng và báo kết quả thành công
-                        currentBuild.result = 'SUCCESS'
-                        error("Skip build for non-main branch after merge")
+                    echo "🔍 Kiểm tra xem kho lưu trữ có phải là shallow không..."
+                    // Kiểm tra xem kho lưu trữ có phải là shallow repository không
+                    def isShallow = sh(script: "git rev-parse --is-shallow-repository", returnStdout: true).trim()
+                    echo "⏳ Kho lưu trữ có phải shallow không? ${isShallow}"
+
+                    // Nếu là shallow, thực hiện fetch toàn bộ lịch sử commit
+                    if (isShallow == "true") {
+                        echo "📂 Kho lưu trữ là shallow. Đang lấy toàn bộ lịch sử..."
+                        sh 'git fetch origin main --prune --unshallow'
+                    } else {
+                        echo "✅ Kho lưu trữ đã đầy đủ. Bỏ qua bước --unshallow."
+                        sh 'git fetch origin main --prune'
+                    }
+
+                    // Fetch tất cả các nhánh để đảm bảo có dữ liệu mới nhất
+                    echo "📂 Đang fetch tất cả các nhánh..."
+                    sh 'git fetch --all --prune'
+
+                    // Kiểm tra xem nhánh main có tồn tại không
+                    echo "🔍 Kiểm tra xem nhánh origin/main có tồn tại không..."
+                    def mainExists = sh(script: "git branch -r | grep 'origin/main' || echo ''", returnStdout: true).trim()
+
+                    // Nếu không tồn tại, thêm nhánh origin/main và fetch lại
+                    if (!mainExists) {
+                        echo "❌ origin/main không tồn tại trong remote. Đang fetch tất cả nhánh..."
+                        sh 'git remote set-branches --add origin main'
+                        sh 'git fetch --all'
+
+                        mainExists = sh(script: "git branch -r | grep 'origin/main' || echo ''", returnStdout: true).trim()
+
+                        // Nếu sau khi fetch vẫn không có nhánh main, báo lỗi
+                        if (!mainExists) {
+                            error("❌ origin/main vẫn không tồn tại! Hãy kiểm tra nhánh này trên remote.")
+                        }
+                    }
+
+                    // Lấy commit base để so sánh với commit hiện tại
+                    def baseCommit = sh(script: "git merge-base origin/main HEAD", returnStdout: true).trim()
+                    echo "🔍 Commit base: ${baseCommit}"
+
+                    // Kiểm tra commit base có hợp lệ không
+                    if (!baseCommit) {
+                        error("❌ Không tìm thấy commit base!")
+                    }
+
+                    // Lấy danh sách các file thay đổi từ commit base
+                    def changes = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
+
+                    echo "📜 Các file thay đổi:\n${changes}"
+
+                    // Nếu không có thay đổi nào, bỏ qua bước build và test
+                    if (!changes) {
+                        echo "ℹ️ Không có thay đổi. Bỏ qua test & build."
+                        SERVICES_CHANGED = ""
+                        return
+                    }
+
+                    // Chuyển danh sách file thay đổi thành mảng
+                    def changedFiles = changes.split("\n")
+
+                    // Chuẩn hóa lại các đường dẫn của file để phù hợp với tên các dịch vụ
+                    def normalizedChanges = changedFiles.collect { file ->
+                        file.replaceFirst("^.*?/spring-petclinic-microservices/", "")
+                    }
+
+                    echo "✅ Các file thay đổi sau khi chuẩn hóa: ${normalizedChanges.join(', ')}"
+
+                    // Danh sách các dịch vụ có sẵn
+                    def services = [
+                        "spring-petclinic-admin-server",
+                        "spring-petclinic-api-gateway",
+                        "spring-petclinic-config-server",
+                        "spring-petclinic-customers-service",
+                        "spring-petclinic-discovery-server",
+                        "spring-petclinic-genai-service",
+                        "spring-petclinic-vets-service",
+                        "spring-petclinic-visits-service",
+                    ]
+
+                    // Lọc ra các dịch vụ có thay đổi
+                    def changedServices = services.findAll { service ->
+                        normalizedChanges.any { file ->
+                            file.startsWith("${service}/") || file.contains("${service}/")
+                        }
+                    }
+
+                    echo "📢 Các dịch vụ thay đổi: ${changedServices.join(', ')}"
+
+                    // Nếu không có dịch vụ nào thay đổi, bỏ qua bước build
+                    if (changedServices.isEmpty()) {
+                        echo "ℹ️ Không có dịch vụ thay đổi. Bỏ qua test & build."
+                        SERVICES_CHANGED = ""
+                        return
+                    }
+
+                    // Lưu thông tin về các dịch vụ thay đổi vào properties của pipeline
+                    properties([
+                        parameters([
+                            string(name: 'SERVICES_CHANGED', defaultValue: changedServices.join(','), description: 'Các dịch vụ thay đổi trong build này')
+                        ])
+                    ])
+
+                    SERVICES_CHANGED = changedServices.join(',')
+                    echo "🚀 Dịch vụ thay đổi (Toàn bộ môi trường): ${SERVICES_CHANGED}"
+                }
+            }
+        }
+        
+        stage('Build (Maven)') {
+            when {
+                expression { SERVICES_CHANGED?.trim() != "" }
+            }
+            steps {
+                script {
+                    def servicesList = SERVICES_CHANGED.tokenize(',')
+
+                    if (servicesList.isEmpty()) {
+                        echo "ℹ️ Không có dịch vụ thay đổi. Bỏ qua build."
+                        return
+                    }
+
+                    // Build từng dịch vụ thay đổi bằng Maven
+                    for (service in servicesList) {
+                        echo "🏗️ Đang build ${service}..."
+                        dir(service) {
+                            sh '../mvnw package -DskipTests -T 1C'
+                        }
                     }
                 }
             }
         }
 
-        stage('Checkout Code') {
+        stage('Docker Build & Push') {
+            when {
+                expression { SERVICES_CHANGED?.trim() != "" }
+            }
             steps {
                 script {
-                    def branchToCheckout = env.BRANCH_NAME ?: 'main'
-                    echo "Checkout branch: ${branchToCheckout}"
-                    git branch: branchToCheckout, 
-                        url: 'https://github.com/tranductung07012004/devOps_1_spring-petclinic-microservices.git'
-                }
-            }
-        }
-        
-        stage('Test Services') {
-            parallel {
-                stage('Test - Customers Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-customers-service/**', comparator: 'ANT'
+                    def servicesList = SERVICES_CHANGED.tokenize(',')
+
+                    if (servicesList.isEmpty()) {
+                        error("❌ Không có dịch vụ thay đổi. Kiểm tra lại bước 'Detect Changes'.")
                     }
-                    steps {
-                        echo "Running tests for Customers Service..."
-                        sh './mvnw -pl spring-petclinic-customers-service clean test'
-                    }
-                    post {
-                        always {
-                            echo "Publishing test results for Customers Service..."
-                            dir('spring-petclinic-customers-service') {
-                                junit 'target/surefire-reports/*.xml'
-                                recordCoverage(
-                                    tools: [[parser: 'JACOCO']],
-                                    id: 'customers-service-coverage',
-                                    name: 'Customers Service Coverage',
-                                    sourceCodeRetention: 'EVERY_BUILD',
-                                    // qualityGates: [
-                                    //     [threshold: 71.0, metric: 'LINE', criticality: 'FAILURE'],
-                                    //     [threshold: 65.0, metric: 'BRANCH', criticality: 'FAILURE'],
-                                    //     [threshold: 75.0, metric: 'METHOD', criticality: 'FAILURE']
-                                    // ]
-                                )
-                                archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true
-                            }
-                        }
-                    }
-                }
-                
-                stage('Test - Genai Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-genai-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Running tests for Genai Service..."
-                        sh './mvnw -pl spring-petclinic-genai-service clean test'
-                    }
-                    post {
-                        always {
-                            echo "Publishing test results for Genai Service..."
-                            dir('spring-petclinic-genai-service') {
-                                junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
-                                recordCoverage(
-                                    tools: [[parser: 'JACOCO']],
-                                    id: 'genai-service-coverage',
-                                    name: 'Gen Ai Service Coverage',
-                                    sourceCodeRetention: 'EVERY_BUILD',
-                                    // qualityGates: [
-                                    //     [threshold: 71.0, metric: 'LINE', criticality: 'UNSTABLE'],
-                                    //     [threshold: 65.0, metric: 'BRANCH', criticality: 'UNSTABLE'],
-                                    //     [threshold: 75.0, metric: 'METHOD', criticality: 'UNSTABLE']
-                                    // ]
-                                )
-                                archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true, allowEmptyArchive: true
-                            }
-                        }
-                    }
-                }
-                
-                stage('Test - Vets Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-vets-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Running tests for Vets Service..."
-                        sh './mvnw -pl spring-petclinic-vets-service clean test'
-                    }
-                    post {
-                        always {
-                            echo "Publishing test results for Vets Service..."
-                            dir('spring-petclinic-vets-service') {
-                                junit 'target/surefire-reports/*.xml'
-                                recordCoverage(
-                                    tools: [[parser: 'JACOCO']],
-                                    id: 'vets-service-coverage',
-                                    name: 'vets Service Coverage',
-                                    sourceCodeRetention: 'EVERY_BUILD',
-                                    // qualityGates: [
-                                    //     [threshold: 71.0, metric: 'LINE',criticality: 'FAILURE'],
-                                    //     [threshold: 65.0, metric: 'BRANCH', criticality: 'FAILURE'],
-                                    //     [threshold: 75.0, metric: 'METHOD', criticality: 'FAILURE']
-                                    // ]
-                                )
-                                archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true
-                            }
-                        }
-                    }
-                }
-                
-                stage('Test - Visits Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-visits-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Running tests for Visits Service..."
-                        sh './mvnw -pl spring-petclinic-visits-service clean test'
-                    }
-                    post {
-                        always {
-                            echo "Publishing test results for Visits Service..."
-                            dir('spring-petclinic-visits-service') {
-                                junit 'target/surefire-reports/*.xml'
-                                recordCoverage(
-                                    tools: [[parser: 'JACOCO']],
-                                    id: 'visits-service-coverage',
-                                    name: 'visits Service Coverage',
-                                    sourceCodeRetention: 'EVERY_BUILD',
-                                    // qualityGates: [
-                                    //     [threshold: 71.0, metric: 'LINE', criticality: 'FAILURE'],
-                                    //     [threshold: 65.0, metric: 'BRANCH', criticality: 'FAILURE'],
-                                    //     [threshold: 75.0, metric: 'METHOD', criticality: 'FAILURE']
-                                    // ]
-                                )
-                                archiveArtifacts artifacts: 'target/surefire-reports/*.xml', fingerprint: true
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('Build Services') {
-            parallel {
-                stage('Build - Customers Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-customers-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Building Customers Service..."
-                        sh './mvnw -pl spring-petclinic-customers-service -am clean install -DskipTests'
-                    }
-                }
-                
-                stage('Build - Genai Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-genai-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Building Genai Service..."
-                        sh './mvnw -pl spring-petclinic-genai-service -am clean install -DskipTests'
-                    }
-                }
-                
-                stage('Build - Vets Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-vets-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Building Vets Service..."
-                        sh './mvnw -pl spring-petclinic-vets-service -am clean install -DskipTests'
-                    }
-                }
-                
-                stage('Build - Visits Service') {
-                    when {
-                        changeset pattern: 'spring-petclinic-visits-service/**', comparator: 'ANT'
-                    }
-                    steps {
-                        echo "Building Visits Service..."
-                        sh './mvnw -pl spring-petclinic-visits-service -am clean install -DskipTests'
-                    }
-                }
-            }
-        }
-        
-        stage('Build Docker Images') {
-            steps {
-                script {
-                    // Get current commit ID for tagging
-                    def commitId = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    
-                    // Define Docker Hub credentials
-                    withCredentials([usernamePassword(credentialsId: 'docker_hub_PAT', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
-                        // Login to Docker Hub
+
+                    // Danh sách cổng cho từng dịch vụ
+                    def servicePorts = [
+                        "spring-petclinic-admin-server": 9090,
+                        "spring-petclinic-api-gateway": 8080,
+                        "spring-petclinic-config-server": 8888,
+                        "spring-petclinic-customers-service": 8081,
+                        "spring-petclinic-discovery-server": 8761,
+                        "spring-petclinic-genai-service": 8084,
+                        "spring-petpetclinic-vets-service": 8083,
+                        "spring-petclinic-visits-service": 8082
+                    ]
+
+                    // Đăng nhập Docker Hub một lần trước khi bắt đầu build
+                    withCredentials([usernamePassword(
+                        credentialsId: 'docker_hub_PAT',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )]) {
+                        echo "🔐 Đăng nhập vào Docker Hub..."
                         sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
-                        
-                        // Get the list of changed files in the current commit
-                        def changedFiles = sh(script: 'git diff --name-only HEAD~1 HEAD', returnStdout: true).trim().split('\n')
-                        
-                        // Define the services and their directories
-                        def serviceDirs = [
-                            'customers-service': 'spring-petclinic-customers-service',
-                            'genai-service': 'spring-petclinic-genai-service',
-                            'vets-service': 'spring-petclinic-vets-service',
-                            'visits-service': 'spring-petclinic-visits-service'
-                        ]
-                        
-                        // Determine which services have changes
-                        def servicesToBuild = []
-                        for (def file in changedFiles) {
-                            for (def entry in serviceDirs) {
-                                if (file.startsWith(entry.value + '/')) {
-                                    if (!servicesToBuild.contains(entry.key)) {
-                                        servicesToBuild.add(entry.key)
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // If no specific service changes detected, skip this stage
-                        if (servicesToBuild.isEmpty()) {
-                            echo "No specific service changes detected. Skipping Docker image build."
-                            return
-                        }
-                        
-                        // Build and push images for services with changes
-                        for (def service in servicesToBuild) {
-                            def serviceDir = serviceDirs[service]
-                            def imageName = "${DOCKER_USERNAME}/spring-petclinic-${service}"
-                            
-                            // Build the service JAR file
-                            sh "./mvnw -pl ${serviceDir} -am clean package -DskipTests"
-                            
-                            // Build and push Docker image
-                            sh """
-                            cp ${serviceDir}/target/*.jar docker/${service}.jar
-                            cd docker
-                            docker build --build-arg ARTIFACT_NAME=${service} --build-arg EXPOSED_PORT=8080 -t ${imageName}:${commitId} .
+                    }
 
-                            docker push ${imageName}:${commitId}
+                    // Build và push Docker image cho từng dịch vụ thay đổi
+                    for (service in servicesList) {
+                        echo "🐳 Đang build & push Docker image cho ${service}..."
 
-                            rm ${service}.jar
-                            cd ..
-                            """
-                            // Only tag/push latest if on main branch
-                            if (env.BRANCH_NAME == 'main') {
-                                sh """
-                                docker tag ${imageName}:${commitId} ${imageName}:latest
-                                docker push ${imageName}:latest
-                                """
-                            }
-                        }
+                        // Lấy tên dịch vụ ngắn
+                        def shortServiceName = service.replaceFirst("spring-petclinic-", "")
+                        
+                        // Lấy cổng của dịch vụ
+                        def servicePort = servicePorts.get(service, 8080)
+                        
+                        // Lấy commit hash
+                        def commitHash = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                        def imageTag = "hzeroxium/${service}:${commitHash}"
+
+                        sh """
+                        docker build \\
+                            --build-arg SERVICE_NAME=${shortServiceName} \\
+                            --build-arg EXPOSED_PORT=${servicePort} \\
+                            -f Dockerfile \\
+                            -t ${imageTag} \\
+                            -t hzeroxium/${service}:latest \\
+                            .
+                        docker push ${imageTag}
+                        docker push hzeroxium/${service}:latest
+                        docker rmi ${imageTag} || true
+                        docker rmi hzeroxium/${service}:latest || true
+                        """
                     }
                 }
             }
         }
 
+        // stage('Update GitOps Repository') {
+        //     when {
+        //         expression { SERVICES_CHANGED?.trim() != "" }
+        //     }
+        //     steps {
+        //         script {
+        //             def servicesList = SERVICES_CHANGED.tokenize(',')
+        //             def commitHash = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+
+        //             sh "rm -rf spring-petclinic-microservices-config || true"
+                    
+        //             withCredentials([usernamePassword(
+        //                 credentialsId: 'github-credentials', 
+        //                 usernameVariable: 'GIT_USERNAME', 
+        //                 passwordVariable: 'GIT_PASSWORD'
+        //             )]) {
+        //                 sh """
+        //                 git clone https://\${GIT_USERNAME}:\${GIT_PASSWORD}@github.com/HZeroxium/spring-petclinic-microservices-config.git
+        //                 """
+                        
+        //                 dir('spring-petclinic-microservices-config') {
+        //                     for (service in servicesList) {
+        //                         def shortServiceName = service.replaceFirst("spring-petclinic-", "")
+        //                         def valuesFile = "values/dev/values-${shortServiceName}.yaml"
+                                
+        //                         sh """
+        //                         if [ -f "${valuesFile}" ]; then
+        //                             echo "Cập nhật tag image trong ${valuesFile}"
+        //                             sed -i 's/\\(tag:\\s*\\).*/\\1"'${commitHash}'"/' ${valuesFile}
+        //                         else
+        //                             echo "Cảnh báo: ${valuesFile} không tìm thấy"
+        //                         fi
+        //                         """
+        //                     }
+                            
+        //                     sh """
+        //                     git config user.email "jenkins@example.com"
+        //                     git config user.name "Jenkins CI"
+        //                     git status
+                            
+        //                     if ! git diff --quiet; then
+        //                         git add .
+        //                         git commit -m "Cập nhật tag image cho ${SERVICES_CHANGED} thành ${commitHash}"
+        //                         git push
+        //                         echo "✅ Đã cập nhật thành công repository GitOps"
+        //                     else
+        //                         echo "ℹ️ Không có thay đổi nào cần commit trong repository GitOps"
+        //                     fi
+        //                     """
+        //                 }
+        //             }
+                    
+        //             sh "rm -rf spring-petclinic-microservices-config || true"
+        //         }
+        //     }
+        // }
     }
 
     post {
-        success {
-            script {
-                def commitId = env.GIT_COMMIT
-                echo "Sending 'success' status to GitHub for commit: ${commitId}"
-                def response = httpRequest(
-                    url: "https://api.github.com/repos/tranductung07012004/devOps_1_spring-petclinic-microservices/statuses/${commitId}",
-                    httpMode: 'POST',
-                    contentType: 'APPLICATION_JSON',
-                    requestBody: """{
-                        "state": "success",
-                        "description": "Build passed",
-                        "context": "ci/jenkins-pipeline",
-                        "target_url": "${env.BUILD_URL}"
-                    }""",
-                    authentication: 'github-token-fix'
-                )
-                echo "GitHub Response: ${response.status}"
-            }
-        }
-
         failure {
             script {
-                def commitId = env.GIT_COMMIT
-                echo "Sending 'failure' status to GitHub for commit: ${commitId}"
-                def response = httpRequest(
-                    url: "https://api.github.com/repos/tranductung07012004/devOps_1_spring-petclinic-microservices/statuses/${commitId}",
-                    httpMode: 'POST',
-                    contentType: 'APPLICATION_JSON',
-                    requestBody: """{
-                        "state": "failure",
-                        "description": "Build failed",
-                        "context": "ci/jenkins-pipeline",
-                        "target_url": "${env.BUILD_URL}"
-                    }""",
-                    authentication: 'github-token-fix'
-                )
-                echo "GitHub Response: ${response.status}"
+                echo "❌ Pipeline CI/CD thất bại!"
             }
         }
-
+        success {
+            script {
+                echo "✅ Pipeline CI/CD thành công!"
+            }
+        }
         always {
-            echo "Pipeline finished."
+            echo "✅ Pipeline hoàn thành cho các dịch vụ: ${SERVICES_CHANGED}"
         }
     }
 }
