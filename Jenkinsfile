@@ -3,17 +3,17 @@ pipeline {
 
     stages {
         
-         stage('Pre-check') {
+        // Stage for pre-checking the commit message and skipping build for merge PR
+        stage('Pre-check') {
             steps {
                 script {
-                    // Lấy thông điệp của commit hiện tại
+                    // Retrieve the latest commit message
                     def commitMessage = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
                     echo "Commit Message: ${commitMessage}"
-                    
-                    // Nếu nhánh không phải main và commit là merge pull request thì dừng pipeline
+
+                    // Skip build if not on the 'main' branch and the commit is a merge from a pull request
                     if (env.BRANCH_NAME != 'main' && commitMessage.contains("Merge pull request")) {
-                        echo "Nhánh ${env.BRANCH_NAME} là nhánh merge PR. Bỏ qua pipeline."
-                        // Dừng pipeline: ta có thể dùng error() để dừng và báo kết quả thành công
+                        echo "Skipping pipeline for PR merge on branch: ${env.BRANCH_NAME}"
                         currentBuild.result = 'SUCCESS'
                         error("Skip build for non-main branch after merge")
                     }
@@ -21,39 +21,40 @@ pipeline {
             }
         }
 
+        // Checkout the appropriate branch of the repository
         stage('Checkout Code') {
             steps {
                 script {
                     def branchToCheckout = env.BRANCH_NAME ?: 'main'
-                    echo "Checkout branch: ${branchToCheckout}"
-                    git branch: branchToCheckout, 
-                        url: 'https://github.com/ndmanh3003/spring-petclinic-microservices-1.git'
+                    echo "Checking out branch: ${branchToCheckout}"
+                    git branch: branchToCheckout, url: 'https://github.com/ndmanh3003/spring-petclinic-microservices-1.git'
                 }
             }
         }
-        
+
+        // Build Docker images for changed services
         stage('Build Docker Images') {
             steps {
                 script {
-                    // Get current commit ID for tagging
+                    // Get the current commit ID for tagging Docker images
                     def commitId = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    
-                    // Define Docker Hub credentials
+
+                    // Use credentials for Docker login
                     withCredentials([usernamePassword(credentialsId: 'docker_hub_PAT', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
-                        // Login to Docker Hub
+                        // Docker login
                         sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
-                        
+
                         // Get the list of changed files in the current commit
                         def changedFiles = sh(script: 'git diff --name-only HEAD~1 HEAD', returnStdout: true).trim().split('\n')
-                        
-                        // Define the services and their directories
+
+                        // Define directories for each service
                         def serviceDirs = [
                             'customers-service': 'spring-petclinic-customers-service',
                             'genai-service': 'spring-petclinic-genai-service',
                             'vets-service': 'spring-petclinic-vets-service',
                             'visits-service': 'spring-petclinic-visits-service'
                         ]
-                        
+
                         // Determine which services have changes
                         def servicesToBuild = []
                         for (def file in changedFiles) {
@@ -65,33 +66,31 @@ pipeline {
                                 }
                             }
                         }
-                        
-                        // If no specific service changes detected, skip this stage
+
+                        // Skip if no services are changed
                         if (servicesToBuild.isEmpty()) {
-                            echo "No specific service changes detected. Skipping Docker image build."
+                            echo "No changes detected for specific services. Skipping Docker build."
                             return
                         }
-                        
-                        // Build and push images for services with changes
+
+                        // Build and push Docker images for the changed services
                         for (def service in servicesToBuild) {
                             def serviceDir = serviceDirs[service]
                             def imageName = "${DOCKER_USERNAME}/spring-petclinic-${service}"
-                            
-                            // Build the service JAR file
+
+                            // Build the JAR for the service
                             sh "./mvnw -pl ${serviceDir} -am clean package -DskipTests"
-                            
+
                             // Build and push Docker image
                             sh """
                             cp ${serviceDir}/target/*.jar docker/${service}.jar
                             cd docker
                             docker build --build-arg ARTIFACT_NAME=${service} --build-arg EXPOSED_PORT=8080 -t ${imageName}:${commitId} .
-
                             docker push ${imageName}:${commitId}
-
                             rm ${service}.jar
                             cd ..
                             """
-                            // Only tag/push latest if on main branch
+                            // If on the main branch, tag and push the latest version
                             if (env.BRANCH_NAME == 'main') {
                                 sh """
                                 docker tag ${imageName}:${commitId} ${imageName}:latest
@@ -103,14 +102,14 @@ pipeline {
                 }
             }
         }
-
     }
 
     post {
         success {
             script {
+                // Notify GitHub of the successful build
                 def commitId = env.GIT_COMMIT
-                echo "Sending 'success' status to GitHub for commit: ${commitId}"
+                echo "Sending success status to GitHub for commit: ${commitId}"
                 def response = httpRequest(
                     url: "https://api.github.com/repos/ndmanh3003/spring-petclinic-microservices-1/statuses/${commitId}",
                     httpMode: 'POST',
@@ -129,8 +128,9 @@ pipeline {
 
         failure {
             script {
+                // Notify GitHub of the failed build
                 def commitId = env.GIT_COMMIT
-                echo "Sending 'failure' status to GitHub for commit: ${commitId}"
+                echo "Sending failure status to GitHub for commit: ${commitId}"
                 def response = httpRequest(
                     url: "https://api.github.com/repos/ndmanh3003/spring-petclinic-microservices-1/statuses/${commitId}",
                     httpMode: 'POST',
